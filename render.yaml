@@ -4,7 +4,8 @@ services:
     env: docker
     plan: free
     region: oregon
-    dockerfilePath: Dockerfile
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
@@ -12,7 +13,16 @@ services:
         value: 0.0.0.0
       - key: NODE_ENV
         value: production
+      - key: FIREBASE_PROJECT_ID
+        value: leafy-brook-mwpgt
+      - key: WA_AUTH_PATH
+        value: ./.wwebjs_auth
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
         value: "true"
       - key: PUPPETEER_EXECUTABLE_PATH
         value: /usr/bin/chromium
+    # Optional: Uncomment on a paid Render plan to persist WhatsApp QR sessions across deploys:
+    # disk:
+    #   name: wa-auth-data
+    #   mountPath: /app/.wwebjs_auth
+    #   sizeGB: 1

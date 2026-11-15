@@ -44,9 +44,21 @@ try {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
+
+function resolveChromeExecutable() {
+  if (process.env.PUPPETEER_EXECUTABLE_PATH && fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
+    return process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+  const candidates = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'];
+  for (const bin of candidates) {
+    if (fs.existsSync(bin)) return bin;
+  }
+  return undefined;
+}
 
 // Enable CORS for cross-origin frontend deployments (Cloudflare Pages, Vercel, custom domains, localhost)
 app.use((req, res, next) => {
@@ -214,7 +226,8 @@ async function requireBroadcastAccess(req, res, next) {
     }
 
     const checkRes = await fetch(`https://apps.tsdc.in/api/check-access?${params.toString()}`, {
-      headers: checkHeaders
+      headers: checkHeaders,
+      signal: AbortSignal.timeout(10000)
     });
 
     const rawText = await checkRes.text();
@@ -336,7 +349,8 @@ async function startUserWhatsApp(userId) {
     }
 
     // Clean stale Chromium singleton locks from previous restarts/crashes
-    const sessionDir = path.join(authPath, `session-desk_${userId}`);
+    const safeClientId = `desk_${String(userId).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+    const sessionDir = path.join(authPath, `session-${safeClientId}`);
     if (fs.existsSync(sessionDir)) {
       for (const lockFile of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
         const lockPath = path.join(sessionDir, lockFile);
@@ -347,10 +361,10 @@ async function startUserWhatsApp(userId) {
     }
 
     const client = new Client({
-      authStrategy: new LocalAuth({ clientId: `desk_${userId}`, dataPath: authPath }),
+      authStrategy: new LocalAuth({ clientId: safeClientId, dataPath: authPath }),
       puppeteer: {
         headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+        executablePath: resolveChromeExecutable(),
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -358,7 +372,13 @@ async function startUserWhatsApp(userId) {
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--disable-gpu'
+          '--disable-gpu',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-sync',
+          '--metrics-recording-only',
+          '--mute-audio',
+          '--no-default-browser-check'
         ]
       },
       takeoverOnConflict: true,

@@ -1,32 +1,58 @@
-# WhatsApp Broadcast Backend (Backend-Only Deployment)
+# WhatsApp Broadcast Backend — Render Deployment Guide
 
-Self-contained Node.js + Chromium API server (`whatsapp-web.js`) for **WhatsApp Personal Broadcast Desk**. Contains only the backend server and deployment configuration—no frontend assets.
+Standalone backend-only Node.js + Chromium API server (`whatsapp-web.js`) for **WhatsApp Personal Broadcast Desk**. Contains only the backend server and Render deployment configuration (no frontend assets).
 
 ## Included Files
-- `server.js` — Express API (`/api/health`, `/api/status`, `/api/whatsapp/connect`, `/api/whatsapp/disconnect`, `/api/contacts/parse-csv`, `/api/send`, `/api/firebase-config`) with CORS, Firebase ID token + TSDC SSO verification, subscription check, stale Chromium lock cleanup, and graceful shutdown.
-- `package.json` — Backend-only dependencies (`express`, `firebase-admin`, `multer`, `qrcode`, `whatsapp-web.js`).
+- `server.js` — Express API (`/api/health`, `/api/status`, `/api/whatsapp/connect`, `/api/whatsapp/disconnect`, `/api/contacts/parse-csv`, `/api/send`, `/api/firebase-config`) with CORS, Firebase ID token + TSDC SSO verification, subscription verification, stale Chromium lock cleanup, and graceful shutdown.
+- `package.json` — Minimal backend-only dependencies (`express`, `firebase-admin`, `multer`, `qrcode`, `whatsapp-web.js`).
 - `firebase-applet-config.json` — Firebase project configuration.
-- `Dockerfile` — Node 20 + Chromium container image.
-- `render.yaml` — Render Blueprint configuration.
-- `Procfile` — Standard process file (`web: node server.js`).
-- `.env.example` — Environment variables reference.
+- `Dockerfile` — Render-ready Node 20 + system Chromium + `tini` container image.
+- `render.yaml` — One-click Render Blueprint configuration.
+- `render-build.sh` — Build script for Render Native Node.js runtime.
+- `Procfile` — Standard process command (`web: node server.js`).
+- `.env.example` — Environment variables template.
 
-## Deploy Option 1: Docker (Any Cloud / VPS / Cloud Run / Railway / Fly.io)
-```bash
-cd whatsapp-backend
-docker build -t whatsapp-broadcast-backend .
-docker run -d -p 3000:3000 -v wa_auth:/app/.wwebjs_auth --name wa-backend whatsapp-broadcast-backend
-```
+---
 
-## Deploy Option 2: Render (using Root Directory or Standalone Repo)
-1. Push this folder (or the repository) to GitHub.
-2. On [dashboard.render.com](https://dashboard.render.com), click **New +** → **Web Service**.
-3. Set **Root Directory** to `whatsapp-backend` (or deploy directly if pushed to its own repo).
-4. Choose **Runtime**: **Docker**.
-5. Optional: Attach a persistent disk mounted at `/app/.wwebjs_auth` (and set `WA_AUTH_PATH=/app/.wwebjs_auth`) to preserve WhatsApp pairing across restarts.
-6. Deploy and verify `https://<your-backend-url>/api/health`.
+## Option 1: Deploy to Render via Web Service (Docker — Recommended)
+1. Push this repo (or copy the `whatsapp-backend/` folder into its own GitHub repository).
+2. In [Render Dashboard](https://dashboard.render.com), click **New +** → **Web Service** and select your repository.
+3. Configure:
+   - **Root Directory**: `whatsapp-backend` *(leave blank if `whatsapp-backend` is pushed as its own repo)*
+   - **Runtime**: **Docker**
+   - **Health Check Path**: `/api/health`
+   - **Environment Variables** *(optional overrides; baked into `Dockerfile`)*:
+     - `HOST` = `0.0.0.0`
+     - `NODE_ENV` = `production`
+     - `FIREBASE_PROJECT_ID` = `leafy-brook-mwpgt`
+     - `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD` = `true`
+     - `PUPPETEER_EXECUTABLE_PATH` = `/usr/bin/chromium`
+4. Click **Create Web Service**.
+5. Once live, verify `https://<your-service>.onrender.com/api/health` returns `{"status":"ok","whatsappReady":true,...}`.
 
-## Connect to Your Frontend Dashboard
-1. Open your deployed Broadcast Desk frontend (e.g. Cloudflare Pages / `broadcast.tsdc.in`).
-2. Click the **BACKEND** status pill in the top header (or open **WhatsApp Connect** → **Configure Backend**).
-3. Enter your deployed backend URL (e.g. `https://your-backend.onrender.com`), click **Test Connection**, and **Save & Apply**.
+> **Tip (Persistent Sessions):** On a paid Render instance, attach a Persistent Disk mounted at `/app/.wwebjs_auth` and set `WA_AUTH_PATH=/app/.wwebjs_auth` so paired WhatsApp sessions survive restarts/deploys.
+
+---
+
+## Option 2: Deploy via Render Blueprint (`render.yaml`)
+- If `whatsapp-backend` is the root of its own repository, click **New +** → **Blueprint** in Render and select that repo—`render.yaml` configures everything automatically.
+
+---
+
+## Option 3: Deploy via Render Native Node.js Runtime
+If you prefer Native Node instead of Docker:
+- **Root Directory**: `whatsapp-backend`
+- **Runtime**: `Node`
+- **Build Command**: `chmod +x ./render-build.sh && ./render-build.sh`
+- **Start Command**: `node server.js`
+- **Environment Variables**:
+  - `PUPPETEER_CACHE_DIR` = `/opt/render/project/src/.cache/puppeteer`
+  - `HOST` = `0.0.0.0`
+  - `FIREBASE_PROJECT_ID` = `leafy-brook-mwpgt`
+
+---
+
+## Connect Your Frontend Dashboard
+1. Open your deployed **WhatsApp Personal Broadcast Desk** frontend.
+2. Click **BACKEND** in the header (or go to **WhatsApp Connect** → **Configure Backend**).
+3. Paste your Render backend URL (`https://<your-service>.onrender.com`), click **Test Connection**, then **Save & Apply**.
