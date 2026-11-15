@@ -1,6 +1,5 @@
-node_modules
-.wwebjs_auth
-.wwebjs_cache
-.git
+node_modules/
+.wwebjs_auth/
+.wwebjs_cache/
 .env
 *.log

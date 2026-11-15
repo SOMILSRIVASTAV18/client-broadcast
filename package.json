@@ -1,12 +1,13 @@
 {
-  "name": "whatsapp-broadcast-render-server",
+  "name": "whatsapp-broadcast-backend",
   "version": "1.0.0",
   "private": true,
-  "description": "Standalone Node.js WhatsApp Web backend server for deployment on Render.com (connects via CORS to Cloudflare Pages / broadcast.tsdc.in).",
+  "description": "Standalone backend-only Node.js + WhatsApp Web API server for WhatsApp Personal Broadcast Desk.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "lint": "node -c server.js"
   },
   "engines": {
     "node": ">=20"

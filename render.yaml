@@ -1,4 +1,3 @@
-# Render Blueprint Configuration (Standalone WhatsApp Backend Server)
 services:
   - type: web
     name: whatsapp-broadcast-backend
