@@ -57,6 +57,11 @@ function resolveChromeExecutable() {
   for (const bin of candidates) {
     if (fs.existsSync(bin)) return bin;
   }
+  try {
+    const puppeteer = require('puppeteer');
+    const bundled = typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : null;
+    if (bundled && fs.existsSync(bundled)) return bundled;
+  } catch (_) {}
   return undefined;
 }
 
