@@ -53,3 +53,13 @@ If you attach a Render Persistent Disk at `/var/data`, add these environment var
 4. Click the **"BACKEND: OFFLINE"** pill in the top header (or **Connect Server** on WhatsApp Connect).
 5. Paste your Render HTTPS URL into **Node.js Backend Server URL**, then click **Test Connection** → **Save & Apply**.
 6. Click **Start Pairing / Generate QR** and scan the QR code in WhatsApp → Linked Devices.
+
+---
+
+## Troubleshooting Render Builds
+
+- **If Render runs `yarn install` and fails on Puppeteer Chrome setup (`/opt/render/.cache/puppeteer`)**:
+  1. In Render **Settings → Language**, switch from **Node** to **Docker** (uses `Dockerfile`, which pre-installs system Chromium and skips Puppeteer browser downloads).
+  2. Click **Manual Deploy → Clear build cache & deploy**.
+  3. If deploying with **Node** runtime intentionally, `.puppeteerrc.cjs` isolates the Chrome cache to `./.cache/puppeteer` inside the project directory—clear build cache on Render if upgrading from an older cached build.
+

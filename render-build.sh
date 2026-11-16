@@ -3,10 +3,10 @@
 set -o errexit
 
 echo "Installing standalone Render backend dependencies..."
+export PUPPETEER_CACHE_DIR="$(pwd)/.cache/puppeteer"
 npm install --omit=dev
 
-echo "Installing Chromium browser for whatsapp-web.js..."
-export PUPPETEER_CACHE_DIR=/opt/render/project/src/.cache/puppeteer
+echo "Ensuring Chromium browser for whatsapp-web.js..."
 npx puppeteer browsers install chrome || true
 
 echo "Render server build complete!"

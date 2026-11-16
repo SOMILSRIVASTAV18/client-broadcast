@@ -381,11 +381,22 @@ async function startUserWhatsApp(userId) {
       try { fs.mkdirSync(authPath, { recursive: true }); } catch (_) {}
     }
 
+    const resolveChromiumExecutable = () => {
+      if (process.env.PUPPETEER_EXECUTABLE_PATH && fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
+        return process.env.PUPPETEER_EXECUTABLE_PATH;
+      }
+      const systemCandidates = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'];
+      for (const candidate of systemCandidates) {
+        if (fs.existsSync(candidate)) return candidate;
+      }
+      return undefined;
+    };
+
     const client = new Client({
       authStrategy: new LocalAuth({ clientId: `desk_${userId}`, dataPath: authPath }),
       puppeteer: {
         headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+        executablePath: resolveChromiumExecutable(),
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
