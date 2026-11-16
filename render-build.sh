@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
+# Optional Render Build Script for Native Node.js Runtime (Docker is recommended via Dockerfile)
 set -o errexit
 
-# Clear any partial/corrupted Puppeteer Chrome caches before installing
-rm -rf /opt/render/.cache/puppeteer ./.cache/puppeteer
-
+echo "Installing standalone Render backend dependencies..."
 npm install --omit=dev
-npx puppeteer browsers install chrome
+
+echo "Installing Chromium browser for whatsapp-web.js..."
+export PUPPETEER_CACHE_DIR=/opt/render/project/src/.cache/puppeteer
+npx puppeteer browsers install chrome || true
+
+echo "Render server build complete!"

@@ -18,13 +18,28 @@ if (process.env.FIREBASE_PROJECT_ID && !firebaseConfig.projectId) {
 let appAdmin = null;
 let authAdmin = null;
 try {
-  const { getApps, initializeApp, getApp } = require('firebase-admin/app');
+  const { getApps, initializeApp, getApp, cert } = require('firebase-admin/app');
   const { getAuth } = require('firebase-admin/auth');
   const apps = getApps();
   if (!apps.length) {
-    appAdmin = firebaseConfig.projectId
-      ? initializeApp({ projectId: firebaseConfig.projectId })
-      : initializeApp();
+    let serviceAccount = null;
+    if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+      try {
+        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+      } catch (e) {
+        console.warn('Invalid FIREBASE_SERVICE_ACCOUNT_JSON env var:', e.message);
+      }
+    }
+    if (serviceAccount) {
+      appAdmin = initializeApp({
+        credential: cert(serviceAccount),
+        projectId: serviceAccount.project_id || firebaseConfig.projectId
+      });
+    } else if (firebaseConfig.projectId) {
+      appAdmin = initializeApp({ projectId: firebaseConfig.projectId });
+    } else {
+      appAdmin = initializeApp();
+    }
   } else {
     appAdmin = getApp();
   }
@@ -44,28 +59,11 @@ try {
 }
 
 const app = express();
-app.set('trust proxy', 1);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
 
-function resolveChromeExecutable() {
-  if (process.env.PUPPETEER_EXECUTABLE_PATH && fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
-    return process.env.PUPPETEER_EXECUTABLE_PATH;
-  }
-  const candidates = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'];
-  for (const bin of candidates) {
-    if (fs.existsSync(bin)) return bin;
-  }
-  try {
-    const puppeteer = require('puppeteer');
-    const bundled = typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : null;
-    if (bundled && fs.existsSync(bundled)) return bundled;
-  } catch (_) {}
-  return undefined;
-}
-
-// Enable CORS for cross-origin frontend deployments (Cloudflare Pages, Vercel, custom domains, localhost)
+// Enable full CORS for cross-origin frontend deployments (Cloudflare Pages, broadcast.tsdc.in, localhost)
 app.use((req, res, next) => {
   const origin = req.headers.origin || '*';
   res.header('Access-Control-Allow-Origin', origin);
@@ -82,11 +80,11 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
-// Root endpoint — confirms backend-only service is live
+// Root endpoint — confirms Render server is live when visited in a browser
 app.get('/', (_req, res) => {
   res.json({
     status: 'ok',
-    server: 'WhatsApp Broadcast Backend',
+    server: 'WhatsApp Broadcast Render Server',
     message: 'Copy this service URL and paste it into your Broadcast Desk Backend Settings.',
     healthEndpoint: '/api/health',
     time: new Date().toISOString()
@@ -97,7 +95,7 @@ app.get('/', (_req, res) => {
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
-    server: 'WhatsApp Broadcast Backend',
+    server: 'WhatsApp Broadcast Render Server',
     whatsappReady: Boolean(Client && LocalAuth),
     time: new Date().toISOString()
   });
@@ -106,6 +104,36 @@ app.get('/api/health', (_req, res) => {
 app.get('/api/firebase-config', (_req, res) => {
   res.json(firebaseConfig);
 });
+
+// Persistent workspace store (data/store.json)
+const STORE_PATH = process.env.WORKSPACE_DATA_PATH || path.join(__dirname, 'data', 'store.json');
+function readStoreFile() {
+  try {
+    if (!fs.existsSync(STORE_PATH)) return {};
+    const raw = fs.readFileSync(STORE_PATH, 'utf8');
+    return raw && raw.trim() ? JSON.parse(raw) : {};
+  } catch (err) {
+    console.warn('Workspace store read warning:', err.message);
+    return {};
+  }
+}
+
+function writeStoreFile(store) {
+  try {
+    const dir = path.dirname(STORE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    console.warn('Workspace store write warning:', err.message);
+    return false;
+  }
+}
+
+function getWorkspaceKey(user) {
+  const email = user && user.email ? String(user.email).trim().toLowerCase() : '';
+  return email || (user && user.uid ? String(user.uid) : 'default_workspace');
+}
 
 // Per-user WhatsApp client instances and state
 const userClients = new Map();
@@ -183,10 +211,11 @@ async function authMiddleware(req, res, next) {
   }
 }
 
-// Short-lived positive access cache (30s) to prevent gateway rate-limiting during status polling
+// Short-lived positive access cache (30s) to prevent gateway rate-limiting during 6s status polling
 const broadcastAccessCache = new Map();
 
-// Enforce active Broadcast subscription via apps.tsdc.in
+// Express middleware for WhatsApp Broadcast (broadcast.tsdc.in)
+// Enforces HTTP 403 SUBSCRIPTION_EXPIRED, SUBSCRIPTION_SUSPENDED, or NO_ACTIVE_SUBSCRIPTION
 async function requireBroadcastAccess(req, res, next) {
   const headerOrQueryEmail = req.headers['x-user-email'] || req.query.email;
   const tokenEmail = req.user && req.user.tokenEmail ? String(req.user.tokenEmail).trim() : '';
@@ -231,8 +260,7 @@ async function requireBroadcastAccess(req, res, next) {
     }
 
     const checkRes = await fetch(`https://apps.tsdc.in/api/check-access?${params.toString()}`, {
-      headers: checkHeaders,
-      signal: AbortSignal.timeout(10000)
+      headers: checkHeaders
     });
 
     const rawText = await checkRes.text();
@@ -344,7 +372,7 @@ async function startUserWhatsApp(userId) {
 
   state.status = 'starting';
   state.qrDataUrl = null;
-  state.message = 'Initializing WhatsApp Web session…';
+  state.message = 'Initializing WhatsApp Web session on Render…';
   state.lastSync = new Date().toISOString();
 
   try {
@@ -353,23 +381,11 @@ async function startUserWhatsApp(userId) {
       try { fs.mkdirSync(authPath, { recursive: true }); } catch (_) {}
     }
 
-    // Clean stale Chromium singleton locks from previous restarts/crashes
-    const safeClientId = `desk_${String(userId).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-    const sessionDir = path.join(authPath, `session-${safeClientId}`);
-    if (fs.existsSync(sessionDir)) {
-      for (const lockFile of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-        const lockPath = path.join(sessionDir, lockFile);
-        try {
-          if (fs.lstatSync(lockPath)) fs.unlinkSync(lockPath);
-        } catch (_) {}
-      }
-    }
-
     const client = new Client({
-      authStrategy: new LocalAuth({ clientId: safeClientId, dataPath: authPath }),
+      authStrategy: new LocalAuth({ clientId: `desk_${userId}`, dataPath: authPath }),
       puppeteer: {
         headless: true,
-        executablePath: resolveChromeExecutable(),
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -377,13 +393,7 @@ async function startUserWhatsApp(userId) {
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--disable-gpu',
-          '--disable-extensions',
-          '--disable-background-networking',
-          '--disable-sync',
-          '--metrics-recording-only',
-          '--mute-audio',
-          '--no-default-browser-check'
+          '--disable-gpu'
         ]
       },
       takeoverOnConflict: true,
@@ -400,8 +410,6 @@ async function startUserWhatsApp(userId) {
         state.lastSync = new Date().toISOString();
       } catch (err) {
         console.error(`QR generation failed for ${userId}:`, err.message);
-        state.status = 'error';
-        state.message = 'Failed to generate QR code.';
       }
     });
 
@@ -436,14 +444,6 @@ async function startUserWhatsApp(userId) {
       userClients.delete(userId);
     });
 
-    client.on('error', (err) => {
-      console.warn(`WhatsApp client error for user ${userId}:`, err?.message || err);
-      state.status = 'error';
-      state.qrDataUrl = null;
-      state.message = `Session error: ${safeText(err?.message || err, 200)}. Click Start Pairing to retry.`;
-      state.lastSync = new Date().toISOString();
-    });
-
     client.initialize().catch((err) => {
       console.warn(`WhatsApp initialize error for user ${userId}:`, err.message);
       state.status = 'disconnected';
@@ -457,7 +457,68 @@ async function startUserWhatsApp(userId) {
   }
 }
 
-// Protected WhatsApp API Routes
+// Optional Firebase Custom Token bridge for SSO users (when service account signing is configured)
+app.post('/api/auth/firebase-token', authMiddleware, requireBroadcastAccess, async (req, res) => {
+  if (!authAdmin) {
+    return res.json({ ok: false, reason: 'firebase_admin_unavailable' });
+  }
+  try {
+    const cleanUid = String(req.user.uid || getWorkspaceKey(req.user))
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 128);
+    const customToken = await authAdmin.createCustomToken(cleanUid, {
+      email: req.user.email || undefined,
+      tsdcSso: true
+    });
+    return res.json({ ok: true, customToken, uid: cleanUid });
+  } catch (err) {
+    return res.json({ ok: false, reason: 'custom_token_unavailable' });
+  }
+});
+
+// Per-user persistent workspace endpoints (fallback/mirror for TSDC SSO users without Firebase custom tokens)
+app.get('/api/workspace', authMiddleware, requireBroadcastAccess, (req, res) => {
+  const store = readStoreFile();
+  const workspaces = (store && typeof store.tsdcWorkspaces === 'object' && store.tsdcWorkspaces) || {};
+  const key = getWorkspaceKey(req.user);
+  const ws = workspaces[key] || {
+    profile: {
+      name: (req.user.email ? req.user.email.split('@')[0] : 'TSDC User'),
+      company: ''
+    },
+    lists: [],
+    contacts: [],
+    campaigns: [],
+    reports: [],
+    updatedAt: null
+  };
+  res.json(ws);
+});
+
+app.put('/api/workspace', authMiddleware, requireBroadcastAccess, (req, res) => {
+  const store = readStoreFile();
+  if (!store.tsdcWorkspaces || typeof store.tsdcWorkspaces !== 'object') {
+    store.tsdcWorkspaces = {};
+  }
+  const key = getWorkspaceKey(req.user);
+  const existing = store.tsdcWorkspaces[key] || {};
+  const body = req.body || {};
+
+  const updated = {
+    profile: body.profile && typeof body.profile === 'object' ? body.profile : (existing.profile || { name: '', company: '' }),
+    lists: Array.isArray(body.lists) ? body.lists : (existing.lists || []),
+    contacts: Array.isArray(body.contacts) ? body.contacts : (existing.contacts || []),
+    campaigns: Array.isArray(body.campaigns) ? body.campaigns : (existing.campaigns || []),
+    reports: Array.isArray(body.reports) ? body.reports : (existing.reports || []),
+    updatedAt: new Date().toISOString()
+  };
+
+  store.tsdcWorkspaces[key] = updated;
+  writeStoreFile(store);
+  res.json({ ok: true, updatedAt: updated.updatedAt });
+});
+
+// Protected WhatsApp Routes
 app.get('/api/status', authMiddleware, requireBroadcastAccess, (req, res) => {
   const state = getWaState(req.user.uid);
   res.json({
@@ -610,33 +671,13 @@ app.post('/api/send', authMiddleware, requireBroadcastAccess, async (req, res) =
   })();
 });
 
-const server = app.listen(PORT, HOST, () => {
-  console.log(`WhatsApp Broadcast Backend running on http://${HOST}:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`WhatsApp Broadcast Render Server running on http://${HOST}:${PORT}`);
 });
 
-server.on('error', (err) => {
-  console.error('HTTP server error:', err.message);
-});
-
-process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled Promise Rejection:', reason instanceof Error ? reason.message : reason);
-});
-
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err instanceof Error ? err.message : err);
-  if (err && (err.code === 'EADDRINUSE' || err.code === 'EACCES')) {
-    process.exit(1);
-  }
-});
-
-async function shutdownGracefully() {
+process.on('SIGINT', async () => {
   for (const client of userClients.values()) {
     try { await client.destroy(); } catch (_) {}
   }
-  userClients.clear();
-  try { server.close(); } catch (_) {}
   process.exit(0);
-}
-
-process.on('SIGINT', shutdownGracefully);
-process.on('SIGTERM', shutdownGracefully);
+});
