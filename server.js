@@ -12,8 +12,9 @@ const {
 } = require('@whiskeysockets/baileys');
 
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
-const HOST = process.env.HOST || '0.0.0.0';
+app.set('trust proxy', 1);
+const PORT = parseInt(process.env.PORT, 10) || 3000;
+const HOST = '0.0.0.0';
 const STORE_PATH = process.env.WORKSPACE_DATA_PATH || path.join(__dirname, 'data', 'store.json');
 const AUTH_BASE_DIR = process.env.WA_AUTH_PATH || path.join(__dirname, '.wwebjs_auth');
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
@@ -141,7 +142,8 @@ async function requireBroadcastAccess(req, res, next) {
     if (userEmail) params.set('email', userEmail);
     const headers = {
       Accept: 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      'Accept-Language': 'en-US,en;q=0.9',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     };
     if (apiKey) headers['X-TSDC-Token'] = apiKey;
 
@@ -327,6 +329,7 @@ async function startUserWhatsApp(userId) {
 
   const prev = userSockets.get(userId);
   if (prev) {
+    try { prev.ev.removeAllListeners(); } catch (_) {}
     try { prev.end(); } catch (_) {}
     userSockets.delete(userId);
   }
@@ -340,7 +343,11 @@ async function startUserWhatsApp(userId) {
     const authDir = safeUserDir(userId);
     fs.mkdirSync(authDir, { recursive: true });
     const { state: authState, saveCreds } = await useMultiFileAuthState(authDir);
-    const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1015901307] }));
+    const fallbackVersion = { version: [2, 3000, 1043857760] };
+    const { version } = await Promise.race([
+      fetchLatestBaileysVersion().catch(() => fallbackVersion),
+      new Promise(r => setTimeout(() => r(fallbackVersion), 5000))
+    ]);
 
     const sock = makeWASocket({
       version,
@@ -349,13 +356,16 @@ async function startUserWhatsApp(userId) {
       browser: Browsers.ubuntu('Chrome'),
       printQRInTerminal: false,
       syncFullHistory: false,
-      markOnlineOnConnect: false
+      markOnlineOnConnect: false,
+      connectTimeoutMs: 60000,
+      keepAliveIntervalMs: 25000
     });
 
     userSockets.set(userId, sock);
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
+      if (userSockets.get(userId) !== sock) return;
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
